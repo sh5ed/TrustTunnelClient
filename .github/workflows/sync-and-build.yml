@@ -2,7 +2,7 @@ name: Sync Upstream & Build Client (AMD64)
 
 on:
   schedule:
-    # Проверка обновлений каждый день в 04:00 UTC
+    # Автоматическая проверка обновлений каждый день в 04:00 UTC
     - cron: '0 4 * * *'
   workflow_dispatch:
   push:
@@ -18,6 +18,11 @@ jobs:
   sync-and-build:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Sync fork with upstream
         id: sync
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
@@ -27,27 +32,23 @@ jobs:
           target_sync_branch: master
           target_repo_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install build dependencies
+      - name: Download latest Linux x86_64 console binary
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3-pip pkg-config libssl-dev
-          pip3 install conan
+          mkdir -p dist
+          URL=$(curl -s https://api.github.com/repos/TrustTunnel/TrustTunnelClient/releases/latest \
+            | grep "browser_download_url" \
+            | grep -E "linux.*(x86_64|amd64)" \
+            | head -n 1 \
+            | cut -d '"' -f 4)
+          echo "Downloading: $URL"
+          curl -fL "$URL" -o dist/client.tar.gz
+          tar -xzf dist/client.tar.gz -C dist/
+          rm -f dist/client.tar.gz
+          find dist -type f -executable -exec mv {} dist/trusttunnel_client \;
 
-      - name: Build console client
+      - name: Create Dockerfile
         run: |
-          chmod +x integration-tests/build_client.sh
-          ./integration-tests/build_client.sh
-
-      - name: Prepare Docker build context
-        run: |
-          mkdir -p docker-dist
-          find build -maxdepth 3 -type f -executable -name "*trusttunnel*" -exec cp {} docker-dist/trusttunnel_client \;
-          cat << 'EOF' > docker-dist/Dockerfile
+          cat << 'EOF' > dist/Dockerfile
           FROM debian:bookworm-slim
           RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
           COPY trusttunnel_client /usr/local/bin/trusttunnel_client
@@ -65,8 +66,8 @@ jobs:
       - name: Build and push AMD64 image
         uses: docker/build-push-action@v5
         with:
-          context: ./docker-dist
-          file: ./docker-dist/Dockerfile
+          context: ./dist
+          file: ./dist/Dockerfile
           platforms: linux/amd64
           push: true
           tags: |
